@@ -32,6 +32,7 @@ func main() {
 		log.Fatalf("Error creating ch: %v", err)
 	}
 
+	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug, "game_logs.*", pubsub.Durable)
 	// wait for ctrl+c
 	/*
 		signalChan := make(chan os.Signal, 1)
