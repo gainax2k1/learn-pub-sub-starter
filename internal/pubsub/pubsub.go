@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -33,10 +34,13 @@ const (
 	Durable
 )
 
-var queueType = map[SimpleQueueType]string{
-	Transient: "transient",
-	Durable:   "durable",
-}
+type AckType int
+
+const (
+	Ack AckType = iota
+	NackDiscard
+	NackRequeue
+)
 
 func DeclareAndBind(
 	conn *amqp.Connection,
@@ -44,6 +48,7 @@ func DeclareAndBind(
 	queueName,
 	key string,
 	queueType SimpleQueueType, // SimpleQueueType is an "enum" type to represent "durable" or "transient"
+
 ) (*amqp.Channel, amqp.Queue, error) {
 
 	ch, err := conn.Channel()
@@ -59,7 +64,10 @@ func DeclareAndBind(
 		autoDelete = true
 		exclusive = true
 	}
-	q, err := ch.QueueDeclare(queueName, durable, autoDelete, exclusive, noWait, nil)
+	//includes "x-dead-letter-exchange" key
+	q, err := ch.QueueDeclare(queueName, durable, autoDelete, exclusive, noWait, amqp.Table{
+		"x-dead-letter-exchange": "peril_dlx",
+	})
 	if err != nil {
 		return nil, amqp.Queue{}, err
 
@@ -71,3 +79,61 @@ func DeclareAndBind(
 	return ch, q, nil
 
 }
+
+// listens for messages and recieves them
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	handler func(T) AckType,
+) error {
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return err
+	}
+
+	messages, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	//go routine to avoid blocking forever on the for...range loop
+	go func() {
+		for msg := range messages {
+			var body T
+			err := json.Unmarshal(msg.Body, &body)
+			if err != nil {
+				fmt.Printf("Error unmarshalling JOSN body: %v", err)
+				continue
+			}
+
+			ackType := handler(body)
+
+			//handle ack for queue
+			//delivery.Ack(false)
+			switch ackType {
+			case Ack:
+				msg.Ack(false)
+
+			case NackDiscard:
+				msg.Nack(false, false)
+
+			case NackRequeue:
+				msg.Nack(false, true)
+			default:
+				fmt.Println("handler default case reached in client subscribejson")
+			}
+		}
+	}()
+	return nil
+}
+
+/*
+main calls SubscribeJSON
+    -> passes handlerPause(gs) as the handler
+        -> handlerPause(gs) returns a func(routing.PlayingState)
+            -> SubscribeJSON stores that function as "handler"
+                -> calls it each time a message arrives
+*/
