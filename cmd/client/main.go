@@ -157,8 +157,7 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyM
 				fmt.Printf("error with .moveOutcomeMakeWar: %s\n", err)
 				return pubsub.NackRequeue
 			}
-			return pubsub.NackRequeue
-
+			return pubsub.Ack
 		default:
 			return pubsub.NackDiscard
 
