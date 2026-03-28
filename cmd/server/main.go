@@ -24,21 +24,40 @@ func main() {
 
 	fmt.Println("Connection successful.")
 
-	gamelogic.PrintClientHelp()
-
 	//func (c *Connection) Channel() (*Channel, error)
 	ch, err := conn.Channel()
 	if err != nil {
 		log.Fatalf("Error creating ch: %v", err)
 	}
 
-	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug, "game_logs.*", pubsub.Durable)
+	err = pubsub.SubscribeGob[routing.GameLog](
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		routing.GameLogSlug+".*",
+		pubsub.Durable,
+		func(log routing.GameLog) pubsub.AckType {
+			defer gamelogic.PrintServerHelp()
+
+			err := gamelogic.WriteLog(log)
+			if err != nil {
+				return pubsub.NackDiscard
+			}
+			return pubsub.Ack
+		},
+	)
+	if err != nil {
+		log.Fatalf("Error subsribiingGob: %v", err)
+	}
+
 	// wait for ctrl+c
 	/*
 		signalChan := make(chan os.Signal, 1)
 		signal.Notify(signalChan, os.Interrupt)
 		<-signalChan
 	*/
+
+	gamelogic.PrintServerHelp()
 	for {
 		userInput := gamelogic.GetInput()
 		if len(userInput) == 0 {

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -69,7 +70,7 @@ func main() {
 		routing.WarRecognitionsPrefix,
 		routing.WarRecognitionsPrefix+".*",
 		pubsub.Durable,
-		handlerWar(gs),
+		handlerWar(gs, publishCh),
 	)
 	if err != nil {
 		log.Fatalf("Error with subscribeJson handler move: %v", err)
@@ -165,12 +166,12 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyM
 	}
 }
 
-func handlerWar(gs *gamelogic.GameState) func(gamelogic.RecognitionOfWar) pubsub.AckType {
+func handlerWar(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
 		defer fmt.Print("> ")
 
 		// call gs.handlewar(Dw) and switch the outcome)
-		dwOutcome, _, _ := gs.HandleWar(dw)
+		dwOutcome, winner, loser := gs.HandleWar(dw)
 
 		switch dwOutcome {
 		case gamelogic.WarOutcomeNotInvolved:
@@ -180,12 +181,30 @@ func handlerWar(gs *gamelogic.GameState) func(gamelogic.RecognitionOfWar) pubsub
 			return pubsub.NackDiscard
 
 		case gamelogic.WarOutcomeOpponentWon:
+			fmt.Printf("%s won a war against %s\n", winner, loser)
+			msg := winner + " won a war against " + loser
+			err := PublishGameLog(ch, gs.GetUsername(), msg)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 
 		case gamelogic.WarOutcomeYouWon:
+			fmt.Printf("%s won a war against %s\n", winner, loser)
+			msg := winner + " won a war against " + loser
+			err := PublishGameLog(ch, gs.GetUsername(), msg)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 
 		case gamelogic.WarOutcomeDraw:
+			fmt.Printf("A war between %s and %s resulted in a draw\n", winner, loser)
+			msg := "A war between " + winner + " and " + loser + "resulted in a draw"
+			err := PublishGameLog(ch, gs.GetUsername(), msg)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 
 		default:
@@ -193,4 +212,19 @@ func handlerWar(gs *gamelogic.GameState) func(gamelogic.RecognitionOfWar) pubsub
 			return pubsub.NackDiscard
 		}
 	}
+}
+
+func PublishGameLog(ch *amqp.Channel, usr string, msg string) error {
+	log := routing.GameLog{
+		CurrentTime: time.Now(),
+		Message:     msg,
+		Username:    usr,
+	}
+
+	return pubsub.PublishGob(
+		ch,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug+"."+usr,
+		log,
+	)
 }

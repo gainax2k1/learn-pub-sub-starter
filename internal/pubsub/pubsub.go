@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -137,3 +139,78 @@ main calls SubscribeJSON
             -> SubscribeJSON stores that function as "handler"
                 -> calls it each time a message arrives
 */
+
+// listens for messages and recieves them
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	handler func(T) AckType,
+) error {
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return err
+	}
+
+	messages, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	//go routine to avoid blocking forever on the for...range loop
+	go func() {
+		for msg := range messages {
+			buf := bytes.NewBuffer(msg.Body)
+			decoder := gob.NewDecoder(buf)
+
+			var body T
+			err := decoder.Decode(&body)
+			if err != nil {
+				fmt.Printf("Error decoding  gob body: %v", err)
+				continue
+			}
+
+			ackType := handler(body)
+
+			//handle ack for queue
+			//delivery.Ack(false)
+			switch ackType {
+			case Ack:
+				msg.Ack(false)
+
+			case NackDiscard:
+				msg.Nack(false, false)
+
+			case NackRequeue:
+				msg.Nack(false, true)
+			default:
+				fmt.Println("handler default case reached in client subscribeGob")
+			}
+		}
+	}()
+	return nil
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	var buf bytes.Buffer
+
+	encoder := gob.NewEncoder(&buf)
+	err := encoder.Encode(val)
+	if err != nil {
+		return err
+	}
+
+	// publishing config
+	ctx := context.Background()
+	mandatory := false
+	immediate := false
+
+	err = ch.PublishWithContext(ctx, exchange, key, mandatory, immediate, amqp.Publishing{
+		ContentType: "application/gob",
+		Body:        buf.Bytes(),
+	})
+
+	return err
+}
