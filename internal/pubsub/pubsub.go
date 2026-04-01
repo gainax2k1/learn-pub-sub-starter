@@ -95,7 +95,10 @@ func SubscribeJSON[T any](
 	if err != nil {
 		return err
 	}
-
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		return err
+	}
 	messages, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 	if err != nil {
 		return err
@@ -153,7 +156,11 @@ func SubscribeGob[T any](
 	if err != nil {
 		return err
 	}
-
+	// call channel.qos here?
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		return err
+	}
 	messages, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 	if err != nil {
 		return err
